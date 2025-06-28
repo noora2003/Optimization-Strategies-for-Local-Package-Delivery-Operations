@@ -1,0 +1,762 @@
+import copy
+import math
+import random
+import matplotlib.pyplot as plt
+import json
+import matplotlib.image as mpimg
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import time
+
+class Package:
+    def __init__(self, id, x, y, weight, priority):
+        self.id = id
+        self.destination = (x, y)  # (x, y) coordinates
+        self.weight = weight
+        self.priority = priority
+        self.x=x
+        self.y=y
+
+
+class Vehicle:
+    def __init__(self, id, capacity):
+        self.id = id
+        self.capacity = capacity
+        self.current_weight = 0  # Total weight of assigned packages
+        self.route = []  # Ordered list of Package objects for delivery
+
+    def add_or_not(self, package):
+        """Check if adding a package exceeds capacity."""
+        return self.current_weight + package.weight <= self.capacity
+
+    def add_package(self, package):
+        """Add a package to the vehicle if capacity allows."""
+        if self.add_or_not(package):
+            self.route.append(package)  # Maintain route order
+            self.current_weight += package.weight
+            return True
+        return False
+
+    def remove_package(self, package):
+        """Remove a package from the vehicle."""
+        if package in self.route:
+            self.route.remove(package)
+            self.current_weight -= package.weight
+            return True
+        return False
+
+    def total_distance(self):
+        """Calculate total Euclidean distance for the vehicle's route."""
+        if not self.route:
+            return 0
+
+        distance = 0
+        current_pos = (0, 0)  # Start at shop
+        for package in self.route:
+            distance += self.euclidean_distance(current_pos, package.destination)
+            current_pos = package.destination
+        # Return to shop
+        distance += self.euclidean_distance(current_pos, (0, 0))
+        return distance
+
+    @staticmethod
+    def euclidean_distance(pos1, pos2):
+        """Calculate Euclidean distance between two points."""
+        return math.sqrt((pos2[0] - pos1[0]) ** 2 + (pos2[1] - pos1[1]) ** 2)
+
+############################################### Genatic algorithm #########################################
+
+class initialize_population: # this class is about generate a chromosom
+    def __init__(self, vehicles, packages):
+        self.vehicles = vehicles
+        self.packages = packages
+        self.chromosome = {}
+
+    def initialize_random(self):
+        # Reset vehicles
+        # The vehicles are empty at the beginning.
+        for vehicle in self.vehicles:
+            vehicle.route = []
+            vehicle.current_weight = 0
+        self.chromosome = {}
+
+        # Randomly assign packages
+        package_ids = [p.id for p in self.packages] # create a list of pkgs id assume package_ids = ['P1', 'P2', 'P3']
+
+        random.shuffle(package_ids)  # assume ['P2', 'P3', 'P1']
+
+        # The shuffle() method takes a sequence, like a list, and reorganize the order of the items.
+        for pkg_id in package_ids:
+            pkg = next(p for p in self.packages if p.id == pkg_id)
+            random.shuffle(self.vehicles) # Then shuffles the vehicles list
+            for vehicle in self.vehicles:
+                if vehicle.add_package(pkg): # if we can add and dont overload  the capacity
+                    self.chromosome[pkg_id] = vehicle.id
+                    break
+            else: # If no vehicle accepts the package it give the package into a random vehicle
+                vehicle = random.choice(self.vehicles) # choice:Return a random element from a list
+                vehicle.add_package(pkg)
+                self.chromosome[pkg_id] = vehicle.id
+            self.sort_routes_by_priority()
+
+    def sort_routes_by_priority(self):
+
+            """Sort each vehicle's route by package priority (lower number = higher priority)."""
+            for vehicle in self.vehicles:
+                if len(vehicle.route) > 1:
+                    vehicle.route.sort(key=lambda p: (p.priority, p.id))
+
+# The fitness function helps us evaluate how “good” each route is
+    def fitness(self):
+     # This sum the total distance driven by all vehicles
+       total_distance = sum(vehicle.total_distance() for vehicle in self.vehicles)
+
+    # Calculate priority penalty (lower priority should be delivered first)
+       priority_penalty = 0
+
+       for vehicle in self.vehicles:
+         for i, package in enumerate(vehicle.route):
+            # Higher position (i) for higher priority  is penalized
+            # penalizes  the solutions where high-priority packages are delivered later in the route:
+            priority_penalty += package.priority * (i + 1) * 0.1 # 0.1 is weighting factor
+
+        # Capacity penalty (if any vehicles are overloaded)
+       capacity_penalty =0
+       for vehicle in self.vehicles:
+            if vehicle.current_weight > vehicle.capacity:
+                capacity_penalty  += 1000 * (vehicle.current_weight - vehicle.capacity)
+
+       return total_distance + priority_penalty + capacity_penalty
+
+    def __str__(self):
+        output = []
+        for vehicle in self.vehicles:
+            pkg_ids = [p.id for p in vehicle.route]
+            output.append(f"Vehicle {vehicle.id}:Route = {pkg_ids}, Weight: {vehicle.current_weight}/{vehicle.capacity} kg")
+        output.append(f"Total Distance: {sum(v.total_distance() for v in self.vehicles):.2f} km")
+        return "\n".join(output)
+
+    def plot_routes(self):
+        """Plot vehicle routes on a background image, supporting any number of vehicles."""
+        # Load background image
+        try:
+            img = mpimg.imread('map.jpg')
+        except FileNotFoundError:
+            print("Error: 'map.jpg' not found. Using blank background.")
+            img = None
+
+        # Initialize plot
+        plt.figure(figsize=(10, 10))
+
+        # Plot background image
+        if img is not None:
+            plt.imshow(img, extent=[-10, 70, -10, 50])  # Matches package coordinates
+
+        # Depot
+        depot_x, depot_y = 0, 0
+        plt.scatter(depot_x, depot_y, c='red', marker='*', s=200, label='SHOP', zorder=10)
+
+        # Create chromosome-like structure: {vehicle_id: [pkg_ids]}
+        chromosome = {v.id: [p.id for p in v.route] for v in self.vehicles}
+
+        # Dynamic colors for vehicles
+        colors = plt.cm.tab10([i / len(self.vehicles) for i in range(len(self.vehicles))])
+
+        # Load pin image
+        try:
+            pin_img = plt.imread('icon2.png')
+        except FileNotFoundError:
+            print("Warning: 'icon2.png' not found. Using default marker.")
+            pin_img = None
+
+        # Plot routes
+        for v_idx, v_id in enumerate(chromosome):
+            pkg_ids = chromosome[v_id]
+            if not pkg_ids:
+                continue
+            route_x = [depot_x]
+            route_y = [depot_y]
+            for i, pkg_id in enumerate(pkg_ids):
+                pkg = next(p for p in self.packages if p.id == pkg_id)
+                x, y = pkg.destination[0], pkg.destination[1]
+                route_x.append(x)
+                route_y.append(y)
+                # Add pin icon or default marker
+                if pin_img is not None:
+                    imagebox = OffsetImage(pin_img, zoom=0.15)
+                    ab = AnnotationBbox(imagebox, (x, y), frameon=False, zorder=5)
+                    plt.gca().add_artist(ab)
+                else:
+                    plt.scatter(x, y, c=colors[v_idx], marker='o', s=100, zorder=5)
+                plt.text(x + 1, y + 1, f'P{pkg_id} ({i + 1})', fontsize=10, zorder=5)
+            route_x.append(depot_x)
+            route_y.append(depot_y)
+            plt.plot(route_x, route_y, c=colors[v_idx], label=f'Vehicle {v_id}', linewidth=2, marker='o', zorder=5)
+
+        # Display total distance
+        total_distance = sum(v.total_distance() for v in self.vehicles)
+        plt.text(0.02, 0.98, f'Distance: {total_distance:.2f} km', transform=plt.gca().transAxes,
+                 bbox=dict(facecolor='white', alpha=0.8, boxstyle='round', zorder=10),
+                 verticalalignment='top', fontsize=12)
+
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title('Genetic Algorithm')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+
+class Genetic_Algorithm:
+      def __init__(self, vehicles, packages, population_size=60, mutation_rate=0.04, generations=500):
+        self.vehicles = vehicles
+        self.packages = packages
+        self.population_size = population_size
+        self.mutation_rate = mutation_rate
+        self.generations = generations
+        self.population = []
+
+      def create_population(self):
+            """Create 60 population of solutions."""
+            self.population = [initialize_population(self.vehicles[:], self.packages[:]) for _ in range(self.population_size)]
+            for solution in self.population:
+                solution.initialize_random()
+
+        # select the best-performing chromosomes to serve as “parents” for the next generation
+      def selection(self): #select perent
+            """Tournament selection: Pick best of random subset."""
+            tournament_size = 3
+            best_chrom = random.sample(self.population, tournament_size)
+            # the sample() method returns a list with a specified number of randomly selected items from a sequence.
+            return min(best_chrom, key=lambda s: s.fitness()) # lower fitness is favor chromosomes
+
+      def Crossover(self, parent1, parent2): #use uniform crossover
+            """Simple crossover: Copy parent1 and swap some chromosomes."""
+            child = initialize_population(self.vehicles[:], self.packages[:]) # create child object (chromosome,route,current weight)
+            child.chromosome = parent1.chromosome.copy() # copy all package assignments from parent1 to child
+            # ---------------------------
+            # Resets each vehicle in the child to have no packages, empty routes, and zero weight.
+            for vehicle in child.vehicles:
+                vehicle.route = []
+                vehicle.current_weight = 0
+            # ---------------------------
+            # Copy chromosome from parent1 to child
+            for pkg_id, veh_id in parent1.chromosome.items():
+                pkg = next(p for p in child.packages if p.id == pkg_id)
+                vehicle = next(v for v in child.vehicles if v.id == veh_id)
+                vehicle.add_package(pkg)
+            # ----------------------------
+            # Swap some chromosome with parent2
+            # Randomly selects half of the package IDs from child.chromosome for swapping with parent2’s chromosome
+            for pkg_id in random.sample(list(child.chromosome.keys()), len(child.chromosome) // 2):
+
+            # Finds the Package object in child.packages corresponding to the current pkg_id.
+                pkg = next(p for p in child.packages if p.id == pkg_id)
+
+            # Finds the vehicle currently assigned to the package in the child (based on parent1’s chromosome).
+                old_vehicle = next(v for v in child.vehicles if v.id == child.chromosome[pkg_id])
+
+            # Removes the package from its current vehicle
+                old_vehicle.remove_package(pkg)
+
+            # Determines the new vehicle to assign the package to, based on parent2’s chromosome for that package
+                new_vehicle = next(v for v in child.vehicles if v.id == parent2.chromosome.get(pkg_id, random.choice(
+                    [v.id for v in child.vehicles])))
+
+            # Add the pkg to new vehicle if done update child
+                if new_vehicle.add_package(pkg):
+                    child.chromosome[pkg_id] = new_vehicle.id
+                else:
+                    # Try to revert to old_vehicle or find another feasible vehicle
+                    if old_vehicle.add_package(pkg):
+                        child.chromosome[pkg_id] = old_vehicle.id
+                    else:
+                        # Find any vehicle that can take the package
+                        for v in child.vehicles:
+                            if v.add_package(pkg):
+                                child.chromosome[pkg_id] = v.id
+                                break
+                        else:
+                            # If no vehicle can take it, assign to old_vehicle and accept violation
+                            old_vehicle.add_package(pkg)
+                            child.chromosome[pkg_id] = old_vehicle.id
+            child.sort_routes_by_priority()
+
+            return child
+
+      def Mutation(self, solution):
+            """Randomly swap packages between vehicles or reorder routes."""
+            if random.random() < self.mutation_rate:
+
+                pkg_id = random.choice(list(solution.chromosome.keys()))
+                pkg = next(p for p in solution.packages if p.id == pkg_id)
+                old_vehicle = next(v for v in solution.vehicles if v.id == solution.chromosome[pkg_id])
+                old_vehicle.remove_package(pkg)
+                new_vehicle = random.choice([v for v in solution.vehicles if v.id != old_vehicle.id])
+                if new_vehicle.add_package(pkg):
+                    solution.chromosome[pkg_id] = new_vehicle.id
+                else:
+                    old_vehicle.add_package(pkg)
+
+            # Mutate route order
+            for vehicle in solution.vehicles:
+                if random.random() < self.mutation_rate and len(vehicle.route) > 1:
+                    i, j = random.sample(range(len(vehicle.route)), 2)
+                    vehicle.route[i], vehicle.route[j] = vehicle.route[j], vehicle.route[i]
+            solution.sort_routes_by_priority()
+
+      def simulat(self):
+            """Run the genetic algorithm."""
+            start_time = time.time()
+            self.create_population()
+            for generation in range(self.generations):
+                new_pop = []
+                best_solution = min(self.population, key=lambda s: s.fitness())
+                new_pop.append(best_solution)
+                while len(new_pop) < self.population_size:
+                    parent1 = self.selection()
+                    parent2 = self.selection()
+                    child = self.Crossover(parent1, parent2)
+                    self.Mutation(child)
+                    new_pop.append(child)
+                self.population = new_pop
+                if generation % 50 == 0 or generation == self.generations - 1:
+                    print(f"Generation {generation}, Best Fitness: {best_solution.fitness():.2f} ")
+            end_time = time.time()
+            execution_time = end_time - start_time
+            print(f"**GA Execution Time: {execution_time:.2f} seconds")
+
+            return min(self.population, key=lambda s: s.fitness())
+
+def print_chromosome(solution, index=None):
+    prefix = f"Chromosome {index}:" if index is not None else "Chromosome:"
+    print(prefix)
+    print(f"Assignments: {solution.chromosome}")
+    for vehicle in solution.vehicles:
+        print(f"Vehicle {vehicle.id}: Route = {[p.id for p in vehicle.route]}, "
+              f"Weight = {vehicle.current_weight}/{vehicle.capacity} kg")
+    print(f"Total Distance: {sum(v.total_distance() for v in solution.vehicles):.2f} km")
+    print(f"Fitness: {solution.fitness():.2f}")
+    print()
+# ---------------------------------------- simulated annealing--------------------------------------------
+class Solution:
+    def __init__(self, packages, vehicles):
+        self.packages = packages
+        self.vehicles = vehicles
+        self.assignments = {v.id: [] for v in vehicles}  # Vehicle ID -> list of package IDs
+        self.routes = [[] for _ in vehicles]
+        self.cost = float('inf')  # Total cost (distance + penalties)
+
+    def initialize(self):
+        """Initialize a random solution with capacity-aware package assignments."""
+
+        # Track remaining capacity for each vehicle
+        remaining_capacities = {v.id: v.capacity for v in self.vehicles}
+        # Shuffle package indices for random processing
+        package_indices = list(range(len(self.packages)))
+        random.shuffle(package_indices)
+
+        # Assign packages to vehicles
+        for pkg_id in package_indices:
+            pkg = self.packages[pkg_id]
+            # Shuffle vehicle indices for random order
+            vehicle_indices = list(range(len(self.vehicles)))
+            random.shuffle(vehicle_indices)
+            assigned = False
+            # Try each vehicle in random order
+            for v_idx in vehicle_indices:
+                v_id = self.vehicles[v_idx].id
+                if remaining_capacities[v_id] >= pkg.weight:
+                    self.assignments[v_id].append(pkg_id)
+                    remaining_capacities[v_id] -= pkg.weight
+                    #assigned = True
+                    break
+            # if not assigned:
+            #     # No feasible vehicle; assign to a random vehicle
+            #     v_idx = random.choice(vehicle_indices)
+            #     v_id = self.vehicles[v_idx].id
+            #     self.assignments[v_id].append(pkg_id)
+            #     remaining_capacities[v_id] -= pkg.weight  # May go negative
+
+                # Build routes for each vehicle
+                # Build routes for each vehicle, sorted by priority
+        for v_id, vehicle in enumerate(self.vehicles):
+
+            vehicle_packages = self.assignments[vehicle.id].copy()
+            vehicle_packages.sort(key=lambda pkg_id: self.packages[pkg_id].priority)
+            self.routes[v_id] = vehicle_packages
+
+    def compute_cost(self):
+        """Compute the total cost: distance + capacity penalty + priority penalty."""
+        total_distance = 0.0
+        capacity_penalty = 0.0
+        priority_penalty = 0.0
+
+        # Compute distance and penalties for each vehicle
+        for v_id, vehicle in enumerate(self.vehicles):
+            route = self.routes[v_id]
+            if not route:  # Empty route
+                continue
+            # Distance: shop -> first package -> ... -> last package -> shop
+            distance = 0.0
+            # From shop (0, 0) to first package
+            first_pkg = self.packages[route[0]]
+            distance += Euclidean_distance(0, 0, first_pkg.x, first_pkg.y)
+            # Between consecutive packages
+            for i in range(len(route) - 1):
+                pkg1 = self.packages[route[i]]
+                pkg2 = self.packages[route[i + 1]]
+                distance += Euclidean_distance(pkg1.x, pkg1.y, pkg2.x, pkg2.y)
+
+            # From last package back to shop
+            last_pkg = self.packages[route[-1]]
+            distance += Euclidean_distance(last_pkg.x, last_pkg.y, 0, 0)
+            total_distance += distance
+
+
+            # Capacity penalty
+            total_weight = sum(self.packages[pkg_id].weight for pkg_id in self.assignments[vehicle.id])
+            if total_weight > vehicle.capacity:
+                capacity_penalty += 1000 * (total_weight - vehicle.capacity)  # Large penalty
+
+            # Priority penalty
+            for i in range(len(route) - 1):
+                pkg1 = self.packages[route[i]]
+                pkg2 = self.packages[route[i + 1]]
+                if pkg1.priority > pkg2.priority:  # Lower number is higher priority
+                    priority_penalty += 0.1 * (pkg1.priority - pkg2.priority)  # Small penalty
+
+        # Total cost
+        self.cost= total_distance + capacity_penalty + priority_penalty
+        return self.cost
+
+    def generate_neighbor(self):
+        """Generate a random neighbor by selecting one of the move types."""
+        move_types = ['swap_packages', 'reassign_package', 'reorder_route']
+        move = random.choice(move_types)
+        if move == 'swap_packages':
+            return self.swap_packages()
+        elif move == 'reassign_package':
+            return self.reassign_package()
+        elif move == 'reorder_route':
+            return self.reorder_route()
+        # else:
+        #     return self.prioritize_route()
+
+    def swap_packages(self):
+        """Swap two packages between different vehicles, maintaining priority order."""
+        neighbor = copy.deepcopy(self)
+        # Choose two vehicles that each have at least one package
+        non_empty_vehicles = [v_id for v_id, pkgs in self.assignments.items() if len(pkgs) > 0]
+        if len(non_empty_vehicles) < 2:
+            return neighbor
+
+        # Randomly pick one package from each of these two vehicles
+        v1_id, v2_id = random.sample(non_empty_vehicles, 2)
+        pkg1_id = random.choice(self.assignments[v1_id])
+        pkg2_id = random.choice(self.assignments[v2_id])
+        # Prevent swapping the same package
+        if pkg1_id == pkg2_id:
+            return neighbor
+
+        pkg1_weight = self.packages[pkg1_id].weight
+        pkg2_weight = self.packages[pkg2_id].weight
+
+        # Compute weights after swap
+        v1_current_weight = sum(self.packages[p].weight for p in self.assignments[v1_id])
+        v2_current_weight = sum(self.packages[p].weight for p in self.assignments[v2_id])
+
+        v1_new_weight = v1_current_weight - pkg1_weight + pkg2_weight
+        v2_new_weight = v2_current_weight - pkg2_weight + pkg1_weight
+
+        # Check capacity constraint
+        if v1_new_weight > self.vehicles[v1_id].capacity or v2_new_weight > self.vehicles[v2_id].capacity:
+            return neighbor  # Do not perform swap if it violates capacity
+
+
+        # Update assignments
+        neighbor.assignments[v1_id].remove(pkg1_id) # remove from v1
+        if pkg2_id not in neighbor.assignments[v1_id]:
+            neighbor.assignments[v1_id].append(pkg2_id)
+        neighbor.assignments[v2_id].remove(pkg2_id) # remove from v2
+        if pkg1_id not in neighbor.assignments[v2_id]:
+            neighbor.assignments[v2_id].append(pkg1_id)
+
+        neighbor.assignments[v1_id].sort(key=lambda pkg_id: self.packages[pkg_id].priority)
+        neighbor.assignments[v2_id].sort(key=lambda pkg_id: self.packages[pkg_id].priority)
+
+        # # # Update routes: remove packages and reinsert based on priority
+        neighbor.routes[v1_id].remove(pkg1_id)
+        neighbor.routes[v2_id].remove(pkg2_id)
+
+
+        # Insert pkg2 into v1's route based on priority
+        pkg2_priority = self.packages[pkg2_id].priority
+        v1_route = neighbor.routes[v1_id]
+        insert_pos = 0
+        for i, p_id in enumerate(v1_route):
+            if self.packages[p_id].priority > pkg2_priority:
+                break
+            insert_pos = i + 1
+        neighbor.routes[v1_id].insert(insert_pos, pkg2_id)
+
+        # Insert pkg1 into v2's route based on priority
+        pkg1_priority = self.packages[pkg1_id].priority
+        v2_route = neighbor.routes[v2_id]
+        insert_pos = 0
+        for i, p_id in enumerate(v2_route):
+            if self.packages[p_id].priority > pkg1_priority:
+                break
+            insert_pos = i + 1
+
+        neighbor.routes[v2_id].insert(insert_pos, pkg1_id)
+
+        return neighbor
+
+    def reassign_package(self):
+        """Reassign a package to another vehicle, preferring feasible capacity."""
+        neighbor = copy.deepcopy(self)
+        # Find vehicles with at least one package
+        non_empty_vehicles = [v_id for v_id in self.assignments.keys() if len(self.assignments[v_id]) > 0]
+        if not non_empty_vehicles or len(self.vehicles) < 2:
+            return neighbor
+        # Choose source vehicle and a random package from it
+        source_v_id = random.choice(non_empty_vehicles)
+        pkg_id = random.choice(self.assignments[source_v_id])
+        possible_targets = [v_id for v_id in self.assignments.keys() if v_id != source_v_id]
+
+        if not possible_targets:
+            return neighbor
+
+        target_v_id = random.choice(possible_targets)
+        pkg_weight = self.packages[pkg_id].weight
+        current_weight = sum(self.packages[p].weight for p in self.assignments[target_v_id])
+        if current_weight + pkg_weight <= self.vehicles[target_v_id].capacity:
+            final_target_v_id = target_v_id
+        else:
+            feasible_targets = [
+                v_id for v_id in possible_targets
+                if sum(self.packages[p].weight for p in self.assignments[v_id]) + pkg_weight <= self.vehicles[
+                    v_id].capacity
+            ]
+            if feasible_targets:
+                final_target_v_id = random.choice(feasible_targets)
+            else:
+                final_target_v_id = target_v_id
+
+        neighbor.assignments[source_v_id].remove(pkg_id)
+        #neighbor.assignments[final_target_v_id].append(pkg_id)
+        neighbor.routes[source_v_id].remove(pkg_id)
+
+        # Add to target only if not already assigned
+        for v_id in neighbor.assignments:
+            if v_id != final_target_v_id and pkg_id in neighbor.assignments[v_id]:
+                neighbor.assignments[v_id].remove(pkg_id)
+                neighbor.routes[v_id].remove(pkg_id)
+
+        if pkg_id not in neighbor.assignments[final_target_v_id]:
+            neighbor.assignments[final_target_v_id].append(pkg_id)
+
+        neighbor.assignments[final_target_v_id].sort(key=lambda pkg_id: self.packages[pkg_id].priority)
+
+        pkg_priority = self.packages[pkg_id].priority
+        target_route = neighbor.routes[final_target_v_id]
+        insert_pos = 0
+        for i, p_id in enumerate(target_route):
+            if self.packages[p_id].priority > pkg_priority:
+                break
+            insert_pos = i + 1
+        neighbor.routes[final_target_v_id].insert(insert_pos, pkg_id)
+        return neighbor
+
+    def reorder_route(self):
+        """Swap two packages in a vehicle's route."""
+        neighbor = copy.deepcopy(self)
+        # Only select vehicles that have at least 2 packages
+        valid_vehicles = [v_id for v_id, route in enumerate(self.routes) if len(route) >= 2]
+        if not valid_vehicles:
+            return neighbor
+        # Pick One Vehicle Randomly
+        v_id = random.choice(valid_vehicles)
+        # Randomly Pick Two Different Indices
+        i, j = random.sample(range(len(self.routes[v_id])), 2)
+        # swap pakgs within same route
+        neighbor.routes[v_id][i], neighbor.routes[v_id][j] = neighbor.routes[v_id][j], neighbor.routes[v_id][i]
+        return neighbor
+    def plot_routes(self):
+        """Plot vehicle routes on a background image, supporting any number of vehicles."""
+        # Load background image
+        img = mpimg.imread('map.jpg')  # Replace with your image file name
+
+        # Initialize plot
+        plt.figure(figsize=(10, 10))
+
+        # Plot background image
+        plt.imshow(img, extent=[-10, 80, -10, 60])  # Adjust extent to match coordinate range
+
+        # Depot
+        depot_x, depot_y = 0, 0
+        plt.scatter(depot_x, depot_y, c='red', marker='*', s=200, label='SHOP', zorder=10)
+
+        # Dynamic colors for vehicles
+        colors = plt.cm.tab10([i / len(self.assignments) for i in range(len(self.assignments))])
+        pin_img = plt.imread('icon2.png')  # Ensure pin.png is in the directory
+
+        # Plot routes
+        # Plot routes
+        for v_idx, v_id in enumerate(self.assignments):
+            pkg_ids = self.assignments[v_id]
+            if not pkg_ids:
+                continue
+            route_x = [depot_x]
+            route_y = [depot_y]
+            for i, pkg_id in enumerate(pkg_ids):
+                pkg = self.packages[pkg_id]
+                x, y = pkg.x, pkg.y
+                route_x.append(x)
+                route_y.append(y)
+                # Add pin icon as marker
+                imagebox = OffsetImage(pin_img, zoom=0.15)  # Adjust zoom for size
+                ab = AnnotationBbox(imagebox, (x, y), frameon=False, zorder=5)
+                plt.gca().add_artist(ab)
+                plt.text(x + 1, y + 1, f'P{pkg_id} ({i + 1})', fontsize=10, zorder=5)
+            route_x.append(depot_x)
+            route_y.append(depot_y)
+            plt.plot(route_x, route_y, c=colors[v_idx], label=f'Vehicle {v_id}', linewidth=2, marker='o', zorder=5)
+            plt.text(0.02, 0.98, f'Cost: {self.cost:.2f}' 'Km', transform=plt.gca().transAxes,
+                     bbox=dict(facecolor='white', alpha=0.8, boxstyle='round', zorder=10),
+                     verticalalignment='top', fontsize=12)
+
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title('Simulated Annealing')
+        plt.legend()
+        plt.grid(True, alpha=0.4)
+        plt.show()
+def simulated_annealing(solution, initial_temp=1000, cooling_rate=0.95, iterations_per_temp=100, final_temp=1):
+    # Initialize solution
+    current_solution = copy.deepcopy(solution)
+    current_solution.initialize()
+    current_solution.compute_cost()
+    best_solution = copy.deepcopy(current_solution)
+    temp = initial_temp
+    iteration = 0
+    while temp > final_temp:
+        for _ in range(iterations_per_temp):
+            # Generate and evaluate neighbor
+            neighbor = current_solution.generate_neighbor()
+            if neighbor is None:
+                print("Warning: get_neighbor returned None, skipping iteration")
+                continue
+            neighbor.compute_cost()
+
+            # Accept neighbor based on Metropolis criterion
+            # If this is positive, the neighbor is worse.
+            # If it's negative or zero, we accept it anyway
+            cost_diff = neighbor.cost - current_solution.cost
+            if cost_diff <= 0 or random.random() < math.exp(-cost_diff / temp):
+                current_solution = copy.deepcopy(neighbor)
+                if current_solution.cost < best_solution.cost:
+                    best_solution = copy.deepcopy(current_solution)
+
+            iteration += 1
+
+        # Cool the temperature
+        temp *= cooling_rate
+       # print(f"Temperature: {temp:.2f}, Best cost: {best_solution.cost:.2f}")
+        return best_solution
+
+def Euclidean_distance(x1, y1, x2, y2):
+    """Calculate Euclidean distance between two points in km."""
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+# -------------- read from json file --------------
+def load_vehicles_from_json(filename):
+    with open("vehicles.json", 'r') as f:
+        data = json.load(f)
+        return [Vehicle(**v) for v in data]
+
+def load_packages_from_json(filename):
+    with open("packegs.json", 'r') as f:
+        data = json.load(f)
+        return [Package(**p) for p in data]
+
+# ------------------ Run SA ------------------------
+def run_SA ():
+        vehicles = load_vehicles_from_json("vehicles.json")
+        packages = load_packages_from_json("packegs.json")
+        start_time = time.time()  # Start timing
+        solution = Solution(packages, vehicles)
+        solution.initialize()
+        solution.compute_cost()
+        print("Initial Solution:")
+        print("Assignments:", solution.assignments)
+        print(f"Cost(Total Distance) : {solution.cost:.2f} Km")
+        sa_solution = simulated_annealing(solution)
+        sa_solution.compute_cost()
+        end_time = time.time()  # End timing
+        execution_time = end_time - start_time
+        print("\nSimulated Annealing Result:")
+        print("Assignments:", sa_solution.assignments)
+        print(f"Cost(Total Distance): {sa_solution.cost:.2f} Km")
+        print(f"Execution Time: {execution_time:.2f} seconds")
+        for v_id in sa_solution.assignments:
+            total_weight = sum(sa_solution.packages[pkg_id].weight for pkg_id in sa_solution.assignments[v_id])
+            capacity = sa_solution.vehicles[v_id].capacity
+            print(f"Vehicle {v_id}: Total Weight = {total_weight} kg / Capacity = {capacity} kg")
+        sa_solution.plot_routes()
+
+#----------------- Run GA -------------------
+def run_GA():
+    # Create sample packages
+    vehicles = load_vehicles_from_json("vehicles.json")
+    packages = load_packages_from_json("packegs.json")
+
+    ga = Genetic_Algorithm(vehicles, packages, population_size=60, mutation_rate=0.05)
+
+    best_solution = ga.simulat()
+    print("\nBest Solution:")
+    print(best_solution)
+    best_solution.plot_routes()
+
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    print("\t\t\t\t\t *******************************************************")
+    print("\t\t\t\t\t -------------- Noura Khdour 1212072 -------------------")
+    print("\t\t\t\t\t ----------- ENCS3340:Packages-Vehicle Routing --------- ")
+    print("\t\t\t\t\t *******************************************************")
+
+    while True:
+        print("\n1: Genetic Algorithm")
+        print("2: Simulated Annealing")
+        print("3: Exit")
+        choice = input("Please choose a number: ")
+
+        if choice == "1":
+            run_GA()
+        elif choice == "2":
+            run_SA()
+        elif choice == "3":
+            print("Exiting...")
+            break
+        else:
+            print("Not a valid choice.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
